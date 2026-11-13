@@ -1,0 +1,512 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Game profile and aggregate progression summary for an authenticated player.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\.\\-]+$"
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "avatarColor": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "photoUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "totalScore": {
+          "type": "integer"
+        },
+        "wordsSolvedCount": {
+          "type": "integer"
+        },
+        "levelsCleared": {
+          "type": "integer"
+        },
+        "bonusWordsCount": {
+          "type": "integer"
+        },
+        "hintsUsed": {
+          "type": "integer"
+        },
+        "bestStreak": {
+          "type": "integer"
+        },
+        "unlockedAchievementIds": {
+          "type": "array",
+          "description": "Bounded list (max 30) of unlocked achievement identifier strings."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "handle",
+        "preferredLanguage",
+        "totalScore",
+        "wordsSolvedCount",
+        "levelsCleared",
+        "bonusWordsCount",
+        "hintsUsed",
+        "bestStreak",
+        "unlockedAchievementIds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivateSecurity": {
+      "title": "UserPrivateSecurity",
+      "description": "Isolated private PII, email/phone verification, subscription plan, and security preferences strictly accessible by the owner.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "emailVerified": {
+          "type": "boolean"
+        },
+        "phoneNumber": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "phoneVerified": {
+          "type": "boolean"
+        },
+        "subscriptionTier": {
+          "type": "string",
+          "enum": ["free", "daily_1", "studio_3"]
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "enum": ["active", "paused", "cancelled"]
+        },
+        "notifyAchievements": {
+          "type": "boolean"
+        },
+        "notifyReminders": {
+          "type": "boolean"
+        },
+        "notifySecurity": {
+          "type": "boolean"
+        },
+        "sessionLockEnabled": {
+          "type": "boolean"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "emailVerified",
+        "phoneNumber",
+        "phoneVerified",
+        "subscriptionTier",
+        "subscriptionStatus",
+        "notifyAchievements",
+        "notifyReminders",
+        "notifySecurity",
+        "sessionLockEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LanguageStat": {
+      "title": "LanguageStat",
+      "description": "Per-language score and progress counters under a user profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "score": {
+          "type": "integer"
+        },
+        "wordsSolved": {
+          "type": "integer"
+        },
+        "puzzlesCompleted": {
+          "type": "integer"
+        },
+        "highestLevel": {
+          "type": "integer"
+        },
+        "hintsUsed": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "language",
+        "score",
+        "wordsSolved",
+        "puzzlesCompleted",
+        "highestLevel",
+        "hintsUsed",
+        "updatedAt"
+      ]
+    },
+    "PlayEvent": {
+      "title": "PlayEvent",
+      "description": "Immutable gameplay analytics record for solved words, bonus words, hints, and level completions.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "level": {
+          "type": "integer"
+        },
+        "puzzleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "word": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "meaningEn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "points": {
+          "type": "integer"
+        },
+        "eventType": {
+          "type": "string",
+          "enum": ["word_solved", "bonus_solved", "level_complete", "hint_used"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "language",
+        "level",
+        "puzzleId",
+        "word",
+        "meaningEn",
+        "points",
+        "eventType",
+        "createdAt"
+      ]
+    },
+    "VocabularyEntry": {
+      "title": "VocabularyEntry",
+      "description": "Bookmarked word with meaning notes saved from the Word Meaning Explorer.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "word": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "translit": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "meaningEn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "pos": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "language",
+        "word",
+        "translit",
+        "meaningEn",
+        "createdAt"
+      ]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "In-app notification item for user achievements, progress milestones, and security events.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280
+        },
+        "category": {
+          "type": "string",
+          "enum": ["achievement", "security", "progress", "reminder"]
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "title",
+        "body",
+        "category",
+        "read",
+        "createdAt"
+      ]
+    },
+    "PersonalTask": {
+      "title": "PersonalTask",
+      "description": "Personal task or study goal with optional calendar schedule timestamp and linked Google Calendar event ID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["task", "goal"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "category": {
+          "type": "string",
+          "enum": ["study", "personal", "work", "health"]
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "dueAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "durationMinutes": {
+          "type": "integer"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["all", "pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "googleEventId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "title",
+        "description",
+        "kind",
+        "priority",
+        "category",
+        "completed",
+        "dueAtIso",
+        "durationMinutes",
+        "language",
+        "googleEventId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PersonalNote": {
+      "title": "PersonalNote",
+      "description": "Personal study or planning note created by the user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "title",
+        "content",
+        "tag",
+        "pinned",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only profile document storing display settings and aggregate game progression."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateSecurity" },
+      "description": "Owner-only private security, verification, subscription, and PII document isolated from the profile root."
+    },
+    "/users/{userId}/languageStats/{langId}": {
+      "schema": { "$ref": "#/entities/LanguageStat" },
+      "description": "Owner-only per-language game statistics."
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/PlayEvent" },
+      "description": "Owner-only immutable gameplay analytics log."
+    },
+    "/users/{userId}/vocabulary/{vocabId}": {
+      "schema": { "$ref": "#/entities/VocabularyEntry" },
+      "description": "Owner-only saved vocabulary meanings and study notes."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "Owner-only notifications for achievements, milestones, and security alerts."
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/PersonalTask" },
+      "description": "Owner-only personal tasks, goals, and calendar schedule items."
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/PersonalNote" },
+      "description": "Owner-only personal notes."
+    }
+  }
+}

@@ -1,0 +1,474 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true
+        || ('phone_number' in request.auth.token && request.auth.token.phone_number != null)
+      );
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidLang(lang) {
+      return lang is string && lang in ['pa', 'en', 'hi', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko'];
+    }
+
+    function isValidTaskLang(lang) {
+      return lang == 'all' || isValidLang(lang);
+    }
+
+    function isNonNegInt(val, maxVal) {
+      return val is int && val >= 0 && val <= maxVal;
+    }
+
+    function isValidAchievementList(listVal) {
+      return listVal is list
+        && listVal.size() <= 30
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() >= 1 && listVal[0].size() <= 64));
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 60
+        && data.handle is string
+        && data.handle.size() >= 2
+        && data.handle.size() <= 32
+        && data.handle.matches('^[a-zA-Z0-9_\\.\\-]+$')
+        && isValidLang(data.preferredLanguage)
+        && (!('avatarColor' in data) || (data.avatarColor is string && data.avatarColor.size() <= 24))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500))
+        && (!('bio' in data) || (data.bio is string && data.bio.size() <= 240))
+        && isNonNegInt(data.totalScore, 10000000)
+        && isNonNegInt(data.wordsSolvedCount, 1000000)
+        && isNonNegInt(data.levelsCleared, 100000)
+        && isNonNegInt(data.bonusWordsCount, 1000000)
+        && isNonNegInt(data.hintsUsed, 1000000)
+        && isNonNegInt(data.bestStreak, 10000)
+        && isValidAchievementList(data.unlockedAchievementIds)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateSecurity(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() <= 160
+        && data.emailVerified is bool
+        && data.phoneNumber is string
+        && data.phoneNumber.size() <= 32
+        && data.phoneVerified is bool
+        && data.subscriptionTier is string
+        && data.subscriptionTier in ['free', 'daily_1', 'studio_3']
+        && data.subscriptionStatus is string
+        && data.subscriptionStatus in ['active', 'paused', 'cancelled']
+        && data.notifyAchievements is bool
+        && data.notifyReminders is bool
+        && data.notifySecurity is bool
+        && data.sessionLockEnabled is bool
+        && (!('lastLoginAt' in data) || data.lastLoginAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLanguageStat(data, userId, langId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidLang(data.language)
+        && data.language == langId
+        && isNonNegInt(data.score, 10000000)
+        && isNonNegInt(data.wordsSolved, 1000000)
+        && isNonNegInt(data.puzzlesCompleted, 100000)
+        && data.highestLevel is int
+        && data.highestLevel >= 1
+        && data.highestLevel <= 6
+        && isNonNegInt(data.hintsUsed, 1000000)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlayEvent(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidLang(data.language)
+        && data.level is int
+        && data.level >= 1
+        && data.level <= 6
+        && data.puzzleId is string
+        && data.puzzleId.size() >= 1
+        && data.puzzleId.size() <= 80
+        && data.word is string
+        && data.word.size() <= 64
+        && data.meaningEn is string
+        && data.meaningEn.size() <= 160
+        && data.points is int
+        && data.points >= -100
+        && data.points <= 1000
+        && data.eventType is string
+        && data.eventType in ['word_solved', 'bonus_solved', 'level_complete', 'hint_used']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVocab(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidLang(data.language)
+        && data.word is string
+        && data.word.size() >= 1
+        && data.word.size() <= 64
+        && data.translit is string
+        && data.translit.size() <= 80
+        && data.meaningEn is string
+        && data.meaningEn.size() >= 1
+        && data.meaningEn.size() <= 200
+        && (!('pos' in data) || (data.pos is string && data.pos.size() <= 32))
+        && (!('note' in data) || (data.note is string && data.note.size() <= 300))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 100
+        && data.body is string
+        && data.body.size() >= 1
+        && data.body.size() <= 280
+        && data.category is string
+        && data.category in ['achievement', 'security', 'progress', 'reminder']
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTask(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 120
+        && data.description is string
+        && data.description.size() <= 400
+        && data.kind is string
+        && data.kind in ['task', 'goal']
+        && data.priority is string
+        && data.priority in ['low', 'medium', 'high']
+        && data.category is string
+        && data.category in ['study', 'personal', 'work', 'health']
+        && data.completed is bool
+        && data.dueAtIso is string
+        && data.dueAtIso.size() <= 40
+        && data.durationMinutes is int
+        && data.durationMinutes >= 5
+        && data.durationMinutes <= 480
+        && isValidTaskLang(data.language)
+        && data.googleEventId is string
+        && data.googleEventId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNote(data, userId) {
+      return data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 100
+        && data.content is string
+        && data.content.size() <= 2000
+        && data.tag is string
+        && data.tag.size() <= 40
+        && data.pinned is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().keys().hasAll([
+          'uid', 'displayName', 'handle', 'preferredLanguage', 'totalScore',
+          'wordsSolvedCount', 'levelsCleared', 'bonusWordsCount', 'hintsUsed',
+          'bestStreak', 'unlockedAchievementIds', 'createdAt', 'updatedAt'
+        ])
+        && incoming().keys().hasOnly([
+          'uid', 'displayName', 'handle', 'preferredLanguage', 'avatarColor',
+          'photoUrl', 'bio', 'totalScore', 'wordsSolvedCount', 'levelsCleared',
+          'bonusWordsCount', 'hintsUsed', 'bestStreak', 'unlockedAchievementIds',
+          'createdAt', 'updatedAt'
+        ])
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName', 'handle', 'preferredLanguage', 'avatarColor',
+            'photoUrl', 'bio', 'updatedAt'
+          ])
+          || incoming().diff(existing()).affectedKeys().hasOnly([
+            'totalScore', 'wordsSolvedCount', 'levelsCleared', 'bonusWordsCount',
+            'hintsUsed', 'bestStreak', 'unlockedAchievementIds', 'preferredLanguage',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /private/{docId} {
+        allow get: if isOwner(userId) && isValidId(userId) && docId == 'security';
+        allow list: if false;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && docId == 'security'
+          && isValidPrivateSecurity(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'email', 'emailVerified', 'phoneNumber', 'phoneVerified',
+            'subscriptionTier', 'subscriptionStatus',
+            'notifyAchievements', 'notifyReminders', 'notifySecurity',
+            'sessionLockEnabled', 'createdAt', 'updatedAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'email', 'emailVerified', 'phoneNumber', 'phoneVerified',
+            'subscriptionTier', 'subscriptionStatus',
+            'notifyAchievements', 'notifyReminders', 'notifySecurity',
+            'sessionLockEnabled', 'lastLoginAt', 'createdAt', 'updatedAt'
+          ])
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && docId == 'security'
+          && isValidPrivateSecurity(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'email', 'emailVerified', 'phoneNumber', 'phoneVerified',
+              'notifyAchievements', 'notifyReminders', 'notifySecurity',
+              'sessionLockEnabled', 'lastLoginAt', 'updatedAt'
+            ])
+            || incoming().diff(existing()).affectedKeys().hasOnly([
+              'subscriptionTier', 'subscriptionStatus', 'updatedAt'
+            ])
+          )
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && docId == 'security';
+      }
+
+      match /languageStats/{langId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidLang(langId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidLang(langId)
+          && isValidLanguageStat(incoming(), userId, langId)
+          && incoming().keys().hasAll([
+            'uid', 'language', 'score', 'wordsSolved', 'puzzlesCompleted',
+            'highestLevel', 'hintsUsed', 'updatedAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'language', 'score', 'wordsSolved', 'puzzlesCompleted',
+            'highestLevel', 'hintsUsed', 'updatedAt'
+          ])
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidLang(langId)
+          && isValidLanguageStat(incoming(), userId, langId)
+          && incoming().uid == existing().uid
+          && incoming().language == existing().language
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'score', 'wordsSolved', 'puzzlesCompleted', 'highestLevel', 'hintsUsed', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidLang(langId);
+      }
+
+      match /sessions/{sessionId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(sessionId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(sessionId)
+          && isValidPlayEvent(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'language', 'level', 'puzzleId', 'word',
+            'meaningEn', 'points', 'eventType', 'createdAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'language', 'level', 'puzzleId', 'word',
+            'meaningEn', 'points', 'eventType', 'createdAt'
+          ])
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(sessionId);
+      }
+
+      match /vocabulary/{vocabId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(vocabId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && isValidVocab(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'language', 'word', 'translit', 'meaningEn', 'createdAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'language', 'word', 'translit', 'meaningEn', 'pos', 'note', 'createdAt'
+          ])
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && isValidVocab(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'note', 'meaningEn', 'translit', 'pos'
+          ])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(vocabId);
+      }
+
+      match /notifications/{notificationId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(notificationId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && isValidNotification(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'title', 'body', 'category', 'read', 'createdAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'title', 'body', 'category', 'read', 'createdAt'
+          ])
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(notificationId)
+          && isValidNotification(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(notificationId);
+      }
+
+      match /tasks/{taskId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(taskId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && isValidTask(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'title', 'description', 'kind', 'priority', 'category',
+            'completed', 'dueAtIso', 'durationMinutes', 'language',
+            'googleEventId', 'createdAt', 'updatedAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'title', 'description', 'kind', 'priority', 'category',
+            'completed', 'dueAtIso', 'durationMinutes', 'language',
+            'googleEventId', 'createdAt', 'updatedAt'
+          ])
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(taskId)
+          && isValidTask(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'kind', 'priority', 'category',
+            'completed', 'dueAtIso', 'durationMinutes', 'language',
+            'googleEventId', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(taskId);
+      }
+
+      match /notes/{noteId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(noteId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(noteId)
+          && isValidNote(incoming(), userId)
+          && incoming().keys().hasAll([
+            'uid', 'title', 'content', 'tag', 'pinned', 'createdAt', 'updatedAt'
+          ])
+          && incoming().keys().hasOnly([
+            'uid', 'title', 'content', 'tag', 'pinned', 'createdAt', 'updatedAt'
+          ])
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(noteId)
+          && isValidNote(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'content', 'tag', 'pinned', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(noteId);
+      }
+    }
+  }
+}
