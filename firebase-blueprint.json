@@ -473,6 +473,96 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "DailyLeaderboardEntry": {
+      "title": "DailyLeaderboardEntry",
+      "description": "Public daily challenge leaderboard entry per verified user, language, and UTC date (non-PII display and score metrics only).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "handle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\.\\-]+$"
+        },
+        "avatarColor": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["pa", "en", "hi", "es", "fr", "de", "it", "pt", "ru", "ja", "ko"]
+        },
+        "puzzleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "score": {
+          "type": "integer"
+        },
+        "wordsSolved": {
+          "type": "integer"
+        },
+        "totalWords": {
+          "type": "integer"
+        },
+        "bonusWords": {
+          "type": "integer"
+        },
+        "hintsUsed": {
+          "type": "integer"
+        },
+        "elapsedSeconds": {
+          "type": "integer"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "handle",
+        "avatarColor",
+        "dateKey",
+        "language",
+        "puzzleId",
+        "score",
+        "wordsSolved",
+        "totalWords",
+        "bonusWords",
+        "hintsUsed",
+        "elapsedSeconds",
+        "completed",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -507,6 +597,10 @@
     "/users/{userId}/notes/{noteId}": {
       "schema": { "$ref": "#/entities/PersonalNote" },
       "description": "Owner-only personal notes."
+    },
+    "/dailyLeaderboard/{entryId}": {
+      "schema": { "$ref": "#/entities/DailyLeaderboardEntry" },
+      "description": "Shared daily challenge leaderboard entries (one per verified user per language per UTC date)."
     }
   }
 }

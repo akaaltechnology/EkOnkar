@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Lock,
   Play,
+  Calendar,
 } from "lucide-react";
 import {
   ACHIEVEMENTS,
@@ -22,10 +23,14 @@ import {
 import { LANGUAGE_LIST, LANGUAGE_PACKS } from "../puzzles";
 import {
   AchievementDef,
+  DailyChallengeProgress,
+  DailyLeaderboardEntry,
   LanguageCode,
   LanguageStatRecord,
   PlayEventRecord,
 } from "../types";
+import { formatElapsedTime } from "../utils/dailyChallenge";
+import DailyLeaderboardPanel from "./DailyLeaderboardPanel";
 
 interface DashboardViewProps {
   totalScore: number;
@@ -39,7 +44,18 @@ interface DashboardViewProps {
   langStats: Partial<Record<LanguageCode, LanguageStatRecord>>;
   sessions: PlayEventRecord[];
   isSignedIn: boolean;
+  activeLanguage: LanguageCode;
+  dailyDateKey: string;
+  dailyCountdown: string;
+  dailyLeaderboardEntries: DailyLeaderboardEntry[];
+  localDailyProgress: DailyChallengeProgress | null;
+  currentUserId: string | null;
+  currentUserDisplayName: string;
+  currentUserHandle: string;
+  currentUserAvatarColor: string;
+  isCloudVerified: boolean;
   onSelectLanguageToPlay: (lang: LanguageCode) => void;
+  onPlayDailyLanguage: (lang: LanguageCode) => void;
   onShareAchievement: (achievement: AchievementDef) => void;
   onOpenAccount: () => void;
 }
@@ -56,7 +72,18 @@ const DashboardView: React.FC<DashboardViewProps> = ({
   langStats,
   sessions,
   isSignedIn,
+  activeLanguage,
+  dailyDateKey,
+  dailyCountdown,
+  dailyLeaderboardEntries,
+  localDailyProgress,
+  currentUserId,
+  currentUserDisplayName,
+  currentUserHandle,
+  currentUserAvatarColor,
+  isCloudVerified,
   onSelectLanguageToPlay,
+  onPlayDailyLanguage,
   onShareAchievement,
   onOpenAccount,
 }) => {
@@ -166,6 +193,42 @@ const DashboardView: React.FC<DashboardViewProps> = ({
             <span>Sign In to Sync Cloud Data</span>
           </button>
         )}
+      </div>
+
+      {/* Daily Challenge Spotlight */}
+      <div className="bg-[#12151C] border border-amber-400/35 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-xs text-amber-400 font-medium tabular-nums">
+            <Calendar className="w-3.5 h-3.5" />
+            <span>
+              Daily Challenge · {LANGUAGE_PACKS[activeLanguage].nameNative} · UTC{" "}
+              {dailyDateKey}
+            </span>
+          </div>
+          <p className="text-base font-semibold text-white">
+            {localDailyProgress?.completed
+              ? `Completed today (${localDailyProgress.score} pts · ${formatElapsedTime(
+                  localDailyProgress.elapsedSeconds
+                )})`
+              : "Same curated puzzle once every 24 hours — compete on today's leaderboard"}
+          </p>
+          <p className="text-xs text-slate-400 tabular-nums">
+            Next 24-hour refresh in {dailyCountdown}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onPlayDailyLanguage(activeLanguage)}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+        >
+          <Calendar className="w-3.5 h-3.5" />
+          <span>
+            {localDailyProgress?.completed
+              ? "View Daily Result & Board"
+              : "Play Daily Challenge"}
+          </span>
+        </button>
       </div>
 
       {/* KPI Strip */}
@@ -481,6 +544,21 @@ const DashboardView: React.FC<DashboardViewProps> = ({
           })}
         </div>
       </section>
+
+      {/* Dedicated Daily Challenge Leaderboard */}
+      <DailyLeaderboardPanel
+        dateKey={dailyDateKey}
+        activeLanguage={activeLanguage}
+        entries={dailyLeaderboardEntries}
+        currentUserId={currentUserId}
+        currentUserDisplayName={currentUserDisplayName}
+        currentUserHandle={currentUserHandle}
+        currentUserAvatarColor={currentUserAvatarColor}
+        isCloudVerified={isCloudVerified}
+        localDailyProgress={localDailyProgress}
+        onOpenAccount={onOpenAccount}
+        onPlayDailyLanguage={onPlayDailyLanguage}
+      />
 
       {/* Activity Ledger Table */}
       <section className="bg-[#12151C] border border-slate-800 rounded-2xl p-5 space-y-4">

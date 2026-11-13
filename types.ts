@@ -310,3 +310,42 @@ export interface SubscriptionPlanDef {
     analyticsExport: string;
   };
 }
+
+export type PlayMode = "levels" | "daily";
+
+export interface DailyChallengeProgress {
+  dateKey: string;
+  language: LanguageCode;
+  puzzleId: string;
+  foundWords: string[];
+  foundBonusWords: string[];
+  revealedCells: RevealedCell[];
+  revealedClueWords: string[];
+  score: number;
+  hintsUsed: number;
+  startedAtMs: number;
+  elapsedSeconds: number;
+  completed: boolean;
+  completedAtMs?: number;
+}
+
+export interface DailyLeaderboardEntry {
+  id: string;
+  uid: string;
+  displayName: string;
+  handle: string;
+  avatarColor: string;
+  dateKey: string;
+  language: LanguageCode;
+  puzzleId: string;
+  score: number;
+  wordsSolved: number;
+  totalWords: number;
+  bonusWords: number;
+  hintsUsed: number;
+  elapsedSeconds: number;
+  completed: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+

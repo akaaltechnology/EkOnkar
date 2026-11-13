@@ -217,6 +217,39 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidDailyEntry(data, entryId) {
+      return data.uid is string
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 60
+        && data.handle is string
+        && data.handle.size() >= 2
+        && data.handle.size() <= 32
+        && data.handle.matches('^[a-zA-Z0-9_\\.\\-]+$')
+        && data.avatarColor is string
+        && data.avatarColor.size() <= 24
+        && data.dateKey is string
+        && data.dateKey.size() == 10
+        && data.dateKey.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidLang(data.language)
+        && entryId == data.dateKey + '_' + data.language + '_' + request.auth.uid
+        && data.puzzleId is string
+        && data.puzzleId.size() >= 1
+        && data.puzzleId.size() <= 80
+        && isNonNegInt(data.score, 50000)
+        && isNonNegInt(data.wordsSolved, 50)
+        && data.totalWords is int
+        && data.totalWords >= 1
+        && data.totalWords <= 50
+        && isNonNegInt(data.bonusWords, 100)
+        && isNonNegInt(data.hintsUsed, 50)
+        && isNonNegInt(data.elapsedSeconds, 86400)
+        && data.completed is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     match /users/{userId} {
       allow get: if isOwner(userId) && isValidId(userId);
       allow list: if false;
@@ -469,6 +502,49 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/users/$(userId));
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(noteId);
       }
+    }
+
+    match /dailyLeaderboard/{entryId} {
+      allow get: if isValidId(entryId);
+      allow list: if resource.data.dateKey is string
+        && resource.data.dateKey.size() == 10
+        && isValidLang(resource.data.language);
+      allow create: if isVerified()
+        && isValidId(entryId)
+        && isValidDailyEntry(incoming(), entryId)
+        && incoming().keys().hasAll([
+          'uid', 'displayName', 'handle', 'avatarColor', 'dateKey', 'language',
+          'puzzleId', 'score', 'wordsSolved', 'totalWords', 'bonusWords',
+          'hintsUsed', 'elapsedSeconds', 'completed', 'createdAt', 'updatedAt'
+        ])
+        && incoming().keys().hasOnly([
+          'uid', 'displayName', 'handle', 'avatarColor', 'dateKey', 'language',
+          'puzzleId', 'score', 'wordsSolved', 'totalWords', 'bonusWords',
+          'hintsUsed', 'elapsedSeconds', 'completed', 'createdAt', 'updatedAt'
+        ])
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isVerified()
+        && isValidId(entryId)
+        && isValidDailyEntry(incoming(), entryId)
+        && existing().completed == false
+        && existing().uid == request.auth.uid
+        && incoming().uid == existing().uid
+        && incoming().dateKey == existing().dateKey
+        && incoming().language == existing().language
+        && incoming().puzzleId == existing().puzzleId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'handle', 'avatarColor', 'score', 'wordsSolved',
+          'bonusWords', 'hintsUsed', 'elapsedSeconds', 'completed', 'updatedAt'
+        ])
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow delete: if isVerified()
+        && isValidId(entryId)
+        && existing().uid == request.auth.uid
+        && existing().completed == false;
     }
   }
 }

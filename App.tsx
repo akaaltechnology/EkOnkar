@@ -23,6 +23,9 @@ import {
   Lightbulb,
   Share2,
   User as UserIcon,
+  Calendar,
+  Clock,
+  Trophy,
 } from "lucide-react";
 import { generatePuzzle } from "./services/geminiService";
 import {
@@ -43,6 +46,8 @@ import {
   saveNoteToCloud,
   saveTaskToCloud,
   saveVocabToCloud,
+  submitDailyLeaderboardEntry,
+  subscribeDailyLeaderboard,
   subscribeUserData,
   syncGameplayToCloud,
   updateSubscriptionInCloud,
@@ -52,6 +57,8 @@ import {
   AchievementDef,
   AppNotification,
   AppView,
+  DailyChallengeProgress,
+  DailyLeaderboardEntry,
   GameState,
   GoogleCalendarEvent,
   HintTier,
@@ -61,6 +68,7 @@ import {
   PersonalTaskRecord,
   PlayEventRecord,
   PlayEventType,
+  PlayMode,
   Puzzle,
   SubscriptionStatus,
   SubscriptionTier,
@@ -82,11 +90,22 @@ import DictionaryView from "./components/DictionaryView";
 import AccountView from "./components/AccountView";
 import PlannerView from "./components/PlannerView";
 import SubscriptionPlansView from "./components/SubscriptionPlansView";
+import DailyLeaderboardPanel from "./components/DailyLeaderboardPanel";
 import { LANGUAGE_LIST, LANGUAGE_PACKS } from "./puzzles";
 import { ACHIEVEMENTS, getAchievementProgress } from "./data/achievements";
 import { SUBSCRIPTION_PLANS } from "./data/subscriptionPlans";
 import { normalizeWord, splitGraphemes } from "./utils/gurmukhi";
 import { describeWordMeaning } from "./utils/wordMeanings";
+import {
+  calculateDailyCompletionBonuses,
+  formatCountdown,
+  formatElapsedTime,
+  getDailyChallengePuzzle,
+  getMsUntilNextUtcDay,
+  getUtcDateKey,
+  loadLocalDailyProgress,
+  saveLocalDailyProgress,
+} from "./utils/dailyChallenge";
 
 const TOTAL_LEVELS = 6;
 
@@ -244,6 +263,29 @@ const App: React.FC = () => {
   const [googleError, setGoogleError] = useState("");
   const [verificationTick, setVerificationTick] = useState(0);
 
+  // Daily Challenge State (deterministic 24h UTC puzzle per language + leaderboard)
+  const [playMode, setPlayMode] = useState<PlayMode>("levels");
+  const [dailyDateKey, setDailyDateKey] = useState<string>(() => getUtcDateKey());
+  const [dailyCountdown, setDailyCountdown] = useState<string>(() =>
+    formatCountdown(getMsUntilNextUtcDay())
+  );
+  const [dailyProgress, setDailyProgress] = useState<DailyChallengeProgress>(() =>
+    loadLocalDailyProgress(
+      getUtcDateKey(),
+      initialLang,
+      getDailyChallengePuzzle(initialLang, getUtcDateKey())
+    )
+  );
+  const [dailyLeaderboardEntries, setDailyLeaderboardEntries] = useState<
+    DailyLeaderboardEntry[]
+  >([]);
+  const [dailyLastBonusBreakdown, setDailyLastBonusBreakdown] = useState<{
+    completionBonus: number;
+    speedBonus: number;
+    hintFreeBonus: number;
+    totalBonus: number;
+  } | null>(null);
+
   const [localCounters, setLocalCounters] = useState<{
     wordsSolvedCount: number;
     levelsCleared: number;
@@ -379,6 +421,90 @@ const App: React.FC = () => {
       if (unsubFirestore) unsubFirestore();
     };
   }, [authUser?.uid, isCloudSynced, verificationTick]);
+
+  // 24-hour UTC Daily Challenge countdown & day rollover ticker
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const now = new Date();
+      const key = getUtcDateKey(now);
+      setDailyCountdown(formatCountdown(getMsUntilNextUtcDay(now)));
+      setDailyDateKey((prevKey) => (prevKey !== key ? key : prevKey));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Subscribe to today's live Daily Leaderboard
+  useEffect(() => {
+    const unsub = subscribeDailyLeaderboard(
+      dailyDateKey,
+      setDailyLeaderboardEntries,
+      (err) => console.warn("Daily leaderboard sync notice:", err.message)
+    );
+    return () => unsub();
+  }, [dailyDateKey]);
+
+  // Reload local daily progress whenever date or selected language changes
+  useEffect(() => {
+    const puz = getDailyChallengePuzzle(state.language, dailyDateKey);
+    const loaded = loadLocalDailyProgress(dailyDateKey, state.language, puz);
+    setDailyProgress(loaded);
+    setDailyLastBonusBreakdown(
+      loaded.completed
+        ? calculateDailyCompletionBonuses(loaded.elapsedSeconds, loaded.hintsUsed)
+        : null
+    );
+  }, [dailyDateKey, state.language]);
+
+  // Sync completion lock if this verified user already completed today's language puzzle in Firestore
+  useEffect(() => {
+    if (!authUser) return;
+    const cloudRow = dailyLeaderboardEntries.find(
+      (e) =>
+        e.uid === authUser.uid &&
+        e.language === state.language &&
+        e.dateKey === dailyDateKey
+    );
+    if (!cloudRow) return;
+    if (cloudRow.completed && !dailyProgress.completed) {
+      const puz = getDailyChallengePuzzle(state.language, dailyDateKey);
+      const synced: DailyChallengeProgress = {
+        ...dailyProgress,
+        foundWords: puz.words.map((w) => w.word),
+        score: cloudRow.score,
+        hintsUsed: cloudRow.hintsUsed,
+        elapsedSeconds: cloudRow.elapsedSeconds,
+        completed: true,
+        completedAtMs: cloudRow.updatedAtMs,
+      };
+      setDailyProgress(synced);
+      saveLocalDailyProgress(synced);
+      setDailyLastBonusBreakdown(
+        calculateDailyCompletionBonuses(cloudRow.elapsedSeconds, cloudRow.hintsUsed)
+      );
+    }
+  }, [authUser, dailyLeaderboardEntries, state.language, dailyDateKey, dailyProgress]);
+
+  // Elapsed timer while actively playing an unfinished Daily Challenge
+  useEffect(() => {
+    if (
+      activeView !== "play" ||
+      playMode !== "daily" ||
+      dailyProgress.completed
+    ) {
+      return;
+    }
+    const id = window.setInterval(() => {
+      setDailyProgress((prev) => {
+        if (prev.completed) return prev;
+        const next = { ...prev, elapsedSeconds: prev.elapsedSeconds + 1 };
+        if (next.elapsedSeconds % 5 === 0) {
+          saveLocalDailyProgress(next);
+        }
+        return next;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [activeView, playMode, dailyProgress.completed]);
 
   useEffect(() => {
     document.documentElement.lang = state.language;
@@ -770,6 +896,36 @@ const App: React.FC = () => {
     [state.language, state.nextPuzzle, state.currentPuzzle]
   );
 
+  const syncDailyCloudEntry = useCallback(
+    async (progress: DailyChallengeProgress, puzzleObj: Puzzle) => {
+      if (!isCloudSynced || !authUser) return;
+      await submitDailyLeaderboardEntry({
+        uid: authUser.uid,
+        displayName:
+          cloudProfile?.displayName ||
+          authUser.displayName ||
+          authUser.email?.split("@")[0] ||
+          "Scholar",
+        handle:
+          cloudProfile?.handle ||
+          authUser.email?.split("@")[0] ||
+          `player_${authUser.uid.slice(0, 6)}`,
+        avatarColor: cloudProfile?.avatarColor || "#F59E0B",
+        dateKey: progress.dateKey,
+        language: progress.language,
+        puzzleId: puzzleObj.id,
+        score: progress.score,
+        wordsSolved: progress.foundWords.length,
+        totalWords: puzzleObj.words.length,
+        bonusWords: progress.foundBonusWords.length,
+        hintsUsed: progress.hintsUsed,
+        elapsedSeconds: progress.elapsedSeconds,
+        completed: progress.completed,
+      });
+    },
+    [isCloudSynced, authUser, cloudProfile]
+  );
+
   const handleLanguageChange = (newLang: LanguageCode) => {
     if (newLang === state.language) return;
     playSfx("click");
@@ -779,18 +935,52 @@ const App: React.FC = () => {
     loadLevel(1, true, newLang);
   };
 
+  const handleOpenDailyForLanguage = (lang: LanguageCode) => {
+    playSfx("click");
+    setUiMessage({ text: "", type: "info" });
+    setCurrentGuess("");
+    setPlayMode("daily");
+    setActiveView("play");
+    if (lang !== state.language) {
+      loadLevel(1, true, lang);
+    }
+  };
+
   const handleWordSubmit = useCallback(
     (rawWord: string) => {
-      if (!state.currentPuzzle) return;
+      const dailyPuzzleObj = getDailyChallengePuzzle(state.language, dailyDateKey);
+      const activePuzzleObj =
+        playMode === "daily" ? dailyPuzzleObj : state.currentPuzzle;
+      if (!activePuzzleObj) return;
+
+      if (playMode === "daily" && dailyProgress.completed) {
+        showTemporaryMessage(
+          "Daily Already Completed",
+          "info",
+          `Next puzzle in ${dailyCountdown}`
+        );
+        setCurrentGuess("");
+        return;
+      }
+
+      const activeFoundList =
+        playMode === "daily" ? dailyProgress.foundWords : state.foundWords;
+      const activeBonusList =
+        playMode === "daily"
+          ? dailyProgress.foundBonusWords
+          : state.foundBonusWords;
+      const currentBoardScore =
+        playMode === "daily" ? dailyProgress.score : state.score;
+
       const word = normalizeWord(rawWord, state.language);
       const tokenCount = splitGraphemes(word, state.language).length;
 
-      const targetWord = state.currentPuzzle.words.find(
+      const targetWord = activePuzzleObj.words.find(
         (w) => normalizeWord(w.word, state.language) === word
       );
 
       if (targetWord) {
-        if (state.foundWords.includes(targetWord.word)) {
+        if (activeFoundList.includes(targetWord.word)) {
           showTemporaryMessage(
             ui.alreadyFound,
             "info",
@@ -798,61 +988,121 @@ const App: React.FC = () => {
           );
           playSfx("error");
         } else {
-          const newFoundWords = [...state.foundWords, targetWord.word];
+          const newFoundWords = [...activeFoundList, targetWord.word];
           const pointsEarned = tokenCount * 20;
-          const isLevelDone =
-            newFoundWords.length === state.currentPuzzle.words.length;
-          const nextScore = state.score + pointsEarned;
+          const isPuzzleDone =
+            newFoundWords.length === activePuzzleObj.words.length;
 
-          setState((prev) => ({
-            ...prev,
-            foundWords: newFoundWords,
-            score: nextScore,
-          }));
-          showTemporaryMessage(
-            `${ui.excellent} +${pointsEarned}`,
-            "success",
-            bilingualMode
-              ? state.language === "en"
-                ? targetWord.meaningEn
-                : `${targetWord.translit} · ${targetWord.meaningEn}`
-              : undefined
-          );
-          playSfx("correct");
+          if (playMode === "daily") {
+            const bonusBreakdown = isPuzzleDone
+              ? calculateDailyCompletionBonuses(
+                  dailyProgress.elapsedSeconds,
+                  dailyProgress.hintsUsed
+                )
+              : null;
+            const totalDailyScore =
+              currentBoardScore +
+              pointsEarned +
+              (bonusBreakdown ? bonusBreakdown.totalBonus : 0);
+            const nextProgress: DailyChallengeProgress = {
+              ...dailyProgress,
+              foundWords: newFoundWords,
+              score: totalDailyScore,
+              completed: isPuzzleDone,
+              completedAtMs: isPuzzleDone ? Date.now() : undefined,
+            };
+            setDailyProgress(nextProgress);
+            saveLocalDailyProgress(nextProgress);
+            if (bonusBreakdown) {
+              setDailyLastBonusBreakdown(bonusBreakdown);
+            }
+            void syncDailyCloudEntry(nextProgress, activePuzzleObj);
 
-          void recordAnalyticsEvent({
-            eventType: isLevelDone ? "level_complete" : "word_solved",
-            word: targetWord.word,
-            meaningEn: targetWord.meaningEn,
-            points: pointsEarned,
-            newLangScore: nextScore,
-            solvedMainWordNow: true,
-            levelClearedNow: isLevelDone,
-          });
-
-          if (isLevelDone) {
-            void addNotification(
-              `Level ${state.level} Completed`,
-              `Solved all ${state.currentPuzzle.words.length} words in ${activePack.nameEn} (${state.currentPuzzle.themeEn}).`,
-              "progress"
+            showTemporaryMessage(
+              isPuzzleDone
+                ? `Daily Complete! +${pointsEarned + (bonusBreakdown?.totalBonus || 0)}`
+                : `${ui.excellent} +${pointsEarned}`,
+              "success",
+              bilingualMode
+                ? state.language === "en"
+                  ? targetWord.meaningEn
+                  : `${targetWord.translit} · ${targetWord.meaningEn}`
+                : undefined
             );
-            window.setTimeout(() => {
-              playSfx("win");
-              if (state.level >= TOTAL_LEVELS) {
-                setState((prev) => ({ ...prev, gameWon: true }));
-              } else {
-                setState((prev) => ({ ...prev, showLevelModal: true }));
-              }
-            }, 650);
+            playSfx(isPuzzleDone ? "win" : "correct");
+
+            void recordAnalyticsEvent({
+              eventType: isPuzzleDone ? "level_complete" : "word_solved",
+              word: targetWord.word,
+              meaningEn: targetWord.meaningEn,
+              points:
+                pointsEarned + (bonusBreakdown ? bonusBreakdown.totalBonus : 0),
+              newLangScore: state.score + pointsEarned,
+              solvedMainWordNow: true,
+              levelClearedNow: isPuzzleDone,
+            });
+
+            if (isPuzzleDone) {
+              void addNotification(
+                `Daily Challenge Completed (${activePack.nameEn})`,
+                `Scored ${totalDailyScore} pts in ${formatElapsedTime(
+                  nextProgress.elapsedSeconds
+                )} on UTC ${dailyDateKey}.`,
+                "progress"
+              );
+            }
+          } else {
+            const nextScore = currentBoardScore + pointsEarned;
+            setState((prev) => ({
+              ...prev,
+              foundWords: newFoundWords,
+              score: nextScore,
+            }));
+            showTemporaryMessage(
+              `${ui.excellent} +${pointsEarned}`,
+              "success",
+              bilingualMode
+                ? state.language === "en"
+                  ? targetWord.meaningEn
+                  : `${targetWord.translit} · ${targetWord.meaningEn}`
+                : undefined
+            );
+            playSfx("correct");
+
+            void recordAnalyticsEvent({
+              eventType: isPuzzleDone ? "level_complete" : "word_solved",
+              word: targetWord.word,
+              meaningEn: targetWord.meaningEn,
+              points: pointsEarned,
+              newLangScore: nextScore,
+              solvedMainWordNow: true,
+              levelClearedNow: isPuzzleDone,
+            });
+
+            if (isPuzzleDone) {
+              void addNotification(
+                `Level ${state.level} Completed`,
+                `Solved all ${activePuzzleObj.words.length} words in ${activePack.nameEn} (${activePuzzleObj.themeEn}).`,
+                "progress"
+              );
+              window.setTimeout(() => {
+                playSfx("win");
+                if (state.level >= TOTAL_LEVELS) {
+                  setState((prev) => ({ ...prev, gameWon: true }));
+                } else {
+                  setState((prev) => ({ ...prev, showLevelModal: true }));
+                }
+              }, 650);
+            }
           }
         }
       } else {
-        const bonusMatch = state.currentPuzzle.bonusWords?.find(
+        const bonusMatch = activePuzzleObj.bonusWords?.find(
           (bw) => normalizeWord(bw.word, state.language) === word
         );
 
         if (bonusMatch) {
-          if (state.foundBonusWords.includes(bonusMatch.word)) {
+          if (activeBonusList.includes(bonusMatch.word)) {
             showTemporaryMessage(
               ui.bonusAlreadyFound,
               "info",
@@ -860,12 +1110,23 @@ const App: React.FC = () => {
             );
             playSfx("error");
           } else {
-            const nextScore = state.score + 10;
-            setState((prev) => ({
-              ...prev,
-              foundBonusWords: [...prev.foundBonusWords, bonusMatch.word],
-              score: nextScore,
-            }));
+            if (playMode === "daily") {
+              const nextProgress: DailyChallengeProgress = {
+                ...dailyProgress,
+                foundBonusWords: [...activeBonusList, bonusMatch.word],
+                score: currentBoardScore + 10,
+              };
+              setDailyProgress(nextProgress);
+              saveLocalDailyProgress(nextProgress);
+              void syncDailyCloudEntry(nextProgress, activePuzzleObj);
+            } else {
+              const nextScore = currentBoardScore + 10;
+              setState((prev) => ({
+                ...prev,
+                foundBonusWords: [...activeBonusList, bonusMatch.word],
+                score: nextScore,
+              }));
+            }
             showTemporaryMessage(
               ui.bonusFound,
               "bonus",
@@ -882,7 +1143,7 @@ const App: React.FC = () => {
               word: bonusMatch.word,
               meaningEn: bonusMatch.meaningEn,
               points: 10,
-              newLangScore: nextScore,
+              newLangScore: state.score + 10,
               bonusNow: true,
             });
           }
@@ -898,6 +1159,10 @@ const App: React.FC = () => {
       setCurrentGuess("");
     },
     [
+      playMode,
+      dailyDateKey,
+      dailyCountdown,
+      dailyProgress,
       state.currentPuzzle,
       state.language,
       state.foundWords,
@@ -912,6 +1177,7 @@ const App: React.FC = () => {
       showTemporaryMessage,
       recordAnalyticsEvent,
       addNotification,
+      syncDailyCloudEntry,
     ]
   );
 
@@ -940,24 +1206,56 @@ const App: React.FC = () => {
   };
 
   const handleApplyHint = (tier: HintTier) => {
-    if (!state.currentPuzzle) return;
-    const unfound = state.currentPuzzle.words.filter(
-      (w) => !state.foundWords.includes(w.word)
+    const activePuzzleObj =
+      playMode === "daily"
+        ? getDailyChallengePuzzle(state.language, dailyDateKey)
+        : state.currentPuzzle;
+    if (!activePuzzleObj) return;
+    if (playMode === "daily" && dailyProgress.completed) return;
+
+    const activeFoundList =
+      playMode === "daily" ? dailyProgress.foundWords : state.foundWords;
+    const activeRevealedCells =
+      playMode === "daily" ? dailyProgress.revealedCells : state.revealedCells;
+    const activeRevealedClues =
+      playMode === "daily"
+        ? dailyProgress.revealedClueWords
+        : state.revealedClueWords;
+    const activeScore =
+      playMode === "daily" ? dailyProgress.score : state.score;
+
+    const unfound = activePuzzleObj.words.filter(
+      (w) => !activeFoundList.includes(w.word)
     );
     if (unfound.length === 0) return;
 
-    if (tier === "clue" && state.score >= 10) {
+    if (tier === "clue" && activeScore >= 10) {
       const candidate =
-        unfound.find((w) => !state.revealedClueWords.includes(w.word)) ||
+        unfound.find((w) => !activeRevealedClues.includes(w.word)) ||
         unfound[0];
-      const nextScore = state.score - 10;
-      setState((prev) => ({
-        ...prev,
-        score: nextScore,
-        revealedClueWords: prev.revealedClueWords.includes(candidate.word)
-          ? prev.revealedClueWords
-          : [...prev.revealedClueWords, candidate.word],
-      }));
+      const nextScore = activeScore - 10;
+      const nextClues = activeRevealedClues.includes(candidate.word)
+        ? activeRevealedClues
+        : [...activeRevealedClues, candidate.word];
+
+      if (playMode === "daily") {
+        const nextProg: DailyChallengeProgress = {
+          ...dailyProgress,
+          score: nextScore,
+          hintsUsed: dailyProgress.hintsUsed + 1,
+          revealedClueWords: nextClues,
+        };
+        setDailyProgress(nextProg);
+        saveLocalDailyProgress(nextProg);
+        void syncDailyCloudEntry(nextProg, activePuzzleObj);
+      } else {
+        setState((prev) => ({
+          ...prev,
+          score: nextScore,
+          revealedClueWords: nextClues,
+        }));
+      }
+
       showTemporaryMessage(
         `Clue Unlocked (-10)`,
         "info",
@@ -969,17 +1267,16 @@ const App: React.FC = () => {
         word: candidate.word,
         meaningEn: `Clue: ${candidate.meaningEn}`,
         points: -10,
-        newLangScore: nextScore,
+        newLangScore: playMode === "daily" ? state.score : nextScore,
         usedHintNow: true,
       });
       return;
     }
 
-    if (tier === "letter" && state.score >= 15) {
-      // Find first unrevealed cell among unfound words
+    if (tier === "letter" && activeScore >= 15) {
       const solvedCoordSet = new Set<string>();
-      state.currentPuzzle.words.forEach((pw) => {
-        if (!state.foundWords.includes(pw.word)) return;
+      activePuzzleObj.words.forEach((pw) => {
+        if (!activeFoundList.includes(pw.word)) return;
         const tokens = splitGraphemes(pw.word, state.language);
         tokens.forEach((_, i) => {
           const cx = pw.direction === "h" ? pw.x + i : pw.x;
@@ -987,7 +1284,7 @@ const App: React.FC = () => {
           solvedCoordSet.add(`${cx},${cy}`);
         });
       });
-      state.revealedCells.forEach((c) => solvedCoordSet.add(`${c.x},${c.y}`));
+      activeRevealedCells.forEach((c) => solvedCoordSet.add(`${c.x},${c.y}`));
 
       const candidates: { x: number; y: number; token: string; word: string }[] = [];
       unfound.forEach((pw) => {
@@ -1003,15 +1300,30 @@ const App: React.FC = () => {
 
       if (candidates.length > 0) {
         const pick = candidates[Math.floor(Math.random() * candidates.length)];
-        const nextScore = state.score - 15;
-        setState((prev) => ({
-          ...prev,
-          score: nextScore,
-          revealedCells: [
-            ...prev.revealedCells,
-            { x: pick.x, y: pick.y, token: pick.token },
-          ],
-        }));
+        const nextScore = activeScore - 15;
+        const nextCells = [
+          ...activeRevealedCells,
+          { x: pick.x, y: pick.y, token: pick.token },
+        ];
+
+        if (playMode === "daily") {
+          const nextProg: DailyChallengeProgress = {
+            ...dailyProgress,
+            score: nextScore,
+            hintsUsed: dailyProgress.hintsUsed + 1,
+            revealedCells: nextCells,
+          };
+          setDailyProgress(nextProg);
+          saveLocalDailyProgress(nextProg);
+          void syncDailyCloudEntry(nextProg, activePuzzleObj);
+        } else {
+          setState((prev) => ({
+            ...prev,
+            score: nextScore,
+            revealedCells: nextCells,
+          }));
+        }
+
         showTemporaryMessage(
           `Letter Revealed: ${pick.token}`,
           "info",
@@ -1023,24 +1335,48 @@ const App: React.FC = () => {
           word: pick.token,
           meaningEn: "Single letter grid hint",
           points: -15,
-          newLangScore: nextScore,
+          newLangScore: playMode === "daily" ? state.score : nextScore,
           usedHintNow: true,
         });
       }
       return;
     }
 
-    if (tier === "word" && state.score >= 30) {
+    if (tier === "word" && activeScore >= 30) {
       const chosen = unfound[Math.floor(Math.random() * unfound.length)];
-      const newFoundWords = [...state.foundWords, chosen.word];
-      const nextScore = state.score - 30;
-      const isLevelDone = newFoundWords.length === state.currentPuzzle.words.length;
+      const newFoundWords = [...activeFoundList, chosen.word];
+      const nextScore = activeScore - 30;
+      const isPuzzleDone = newFoundWords.length === activePuzzleObj.words.length;
 
-      setState((prev) => ({
-        ...prev,
-        foundWords: newFoundWords,
-        score: nextScore,
-      }));
+      if (playMode === "daily") {
+        const nextHintsUsed = dailyProgress.hintsUsed + 1;
+        const bonusBreakdown = isPuzzleDone
+          ? calculateDailyCompletionBonuses(
+              dailyProgress.elapsedSeconds,
+              nextHintsUsed
+            )
+          : null;
+        const finalDailyScore =
+          nextScore + (bonusBreakdown ? bonusBreakdown.totalBonus : 0);
+        const nextProg: DailyChallengeProgress = {
+          ...dailyProgress,
+          foundWords: newFoundWords,
+          score: finalDailyScore,
+          hintsUsed: nextHintsUsed,
+          completed: isPuzzleDone,
+          completedAtMs: isPuzzleDone ? Date.now() : undefined,
+        };
+        setDailyProgress(nextProg);
+        saveLocalDailyProgress(nextProg);
+        if (bonusBreakdown) setDailyLastBonusBreakdown(bonusBreakdown);
+        void syncDailyCloudEntry(nextProg, activePuzzleObj);
+      } else {
+        setState((prev) => ({
+          ...prev,
+          foundWords: newFoundWords,
+          score: nextScore,
+        }));
+      }
 
       showTemporaryMessage(
         `${ui.hintApplied} ${chosen.word}`,
@@ -1051,19 +1387,19 @@ const App: React.FC = () => {
             : `${chosen.translit} · ${chosen.meaningEn}`
           : undefined
       );
-      playSfx("bonus");
+      playSfx(isPuzzleDone ? "win" : "bonus");
 
       void recordAnalyticsEvent({
         eventType: "hint_used",
         word: chosen.word,
         meaningEn: chosen.meaningEn,
         points: -30,
-        newLangScore: nextScore,
+        newLangScore: playMode === "daily" ? state.score : nextScore,
         usedHintNow: true,
-        levelClearedNow: isLevelDone,
+        levelClearedNow: isPuzzleDone,
       });
 
-      if (isLevelDone) {
+      if (isPuzzleDone && playMode !== "daily") {
         window.setTimeout(() => {
           playSfx("win");
           if (state.level >= TOTAL_LEVELS) {
@@ -1077,7 +1413,11 @@ const App: React.FC = () => {
   };
 
   const openMeaningForWord = (word: string, lang: LanguageCode = state.language) => {
-    const detail = describeWordMeaning(word, lang, state.currentPuzzle);
+    const activePuzzleObj =
+      playMode === "daily"
+        ? getDailyChallengePuzzle(lang, dailyDateKey)
+        : state.currentPuzzle;
+    const detail = describeWordMeaning(word, lang, activePuzzleObj);
     if (detail) {
       playSfx("click");
       setInspectedMeaning(detail);
@@ -1376,14 +1716,29 @@ const App: React.FC = () => {
     }
   };
 
-  const puzzle = state.currentPuzzle;
+  const isDailyMode = playMode === "daily";
+  const dailyPuzzle = getDailyChallengePuzzle(state.language, dailyDateKey);
+  const puzzle = isDailyMode ? dailyPuzzle : state.currentPuzzle;
+  const activeFoundWords = isDailyMode
+    ? dailyProgress.foundWords
+    : state.foundWords;
+  const activeFoundBonusWords = isDailyMode
+    ? dailyProgress.foundBonusWords
+    : state.foundBonusWords;
+  const activeRevealedCells = isDailyMode
+    ? dailyProgress.revealedCells
+    : state.revealedCells;
+  const activeRevealedClueWords = isDailyMode
+    ? dailyProgress.revealedClueWords
+    : state.revealedClueWords;
+  const activeBoardScore = isDailyMode ? dailyProgress.score : state.score;
   const unreadNotifCount = effectiveNotifs.filter((n) => !n.read).length;
 
   const remainingWords = puzzle
-    ? puzzle.words.filter((w) => !state.foundWords.includes(w.word))
+    ? puzzle.words.filter((w) => !activeFoundWords.includes(w.word))
     : [];
   const hasUnrevealedClues = remainingWords.some(
-    (w) => !state.revealedClueWords.includes(w.word)
+    (w) => !activeRevealedClueWords.includes(w.word)
   );
   const hasUnrevealedLetters = (() => {
     if (!puzzle) return false;
@@ -1397,14 +1752,14 @@ const App: React.FC = () => {
     });
     const revealedSet = new Set<string>();
     puzzle.words.forEach((pw) => {
-      if (!state.foundWords.includes(pw.word)) return;
+      if (!activeFoundWords.includes(pw.word)) return;
       splitGraphemes(pw.word, state.language).forEach((_, i) => {
         const cx = pw.direction === "h" ? pw.x + i : pw.x;
         const cy = pw.direction === "v" ? pw.y + i : pw.y;
         revealedSet.add(`${cx},${cy}`);
       });
     });
-    state.revealedCells.forEach((c) => revealedSet.add(`${c.x},${c.y}`));
+    activeRevealedCells.forEach((c) => revealedSet.add(`${c.x},${c.y}`));
     return revealedSet.size < totalNeededCells.size;
   })();
 
@@ -1694,10 +2049,24 @@ const App: React.FC = () => {
             langStats={effectiveLangStats}
             sessions={effectiveSessions}
             isSignedIn={Boolean(authUser)}
+            activeLanguage={state.language}
+            dailyDateKey={dailyDateKey}
+            dailyCountdown={dailyCountdown}
+            dailyLeaderboardEntries={dailyLeaderboardEntries}
+            localDailyProgress={dailyProgress}
+            currentUserId={authUser?.uid || null}
+            currentUserDisplayName={
+              cloudProfile?.displayName || authUser?.displayName || "You"
+            }
+            currentUserHandle={cloudProfile?.handle || "player"}
+            currentUserAvatarColor={cloudProfile?.avatarColor || "#F59E0B"}
+            isCloudVerified={isCloudSynced}
             onSelectLanguageToPlay={(lang) => {
               handleLanguageChange(lang);
+              setPlayMode("levels");
               setActiveView("play");
             }}
+            onPlayDailyLanguage={handleOpenDailyForLanguage}
             onShareAchievement={(ach) => setShareTarget(ach)}
             onOpenAccount={() => setActiveView("account")}
           />
@@ -1772,31 +2141,104 @@ const App: React.FC = () => {
           />
         ) : (
           <>
-            {/* Play Workspace Toolbar (Level + Language + Bilingual + Utility Controls) */}
+            {/* Play Workspace Toolbar (Mode + Level + Language + Bilingual + Utility Controls) */}
             <div className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 pt-4 flex flex-wrap items-center justify-between gap-3">
-              <div
-                aria-label="Level selection"
-                className="flex items-center gap-1 bg-[#12151C] p-1 rounded-lg border border-slate-800"
-              >
-                {Array.from({ length: TOTAL_LEVELS }, (_, idx) => idx + 1).map(
-                  (lvl) => (
-                    <button
-                      key={lvl}
-                      type="button"
-                      onClick={() => {
-                        playSfx("click");
-                        loadLevel(lvl, true);
-                      }}
-                      className={`px-2.5 sm:px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 tabular-nums ${
-                        state.level === lvl
-                          ? "bg-amber-400 text-slate-950 font-semibold"
-                          : "text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      <span className="hidden sm:inline">{ui.levelLabel} </span>
-                      {lvl}
-                    </button>
-                  )
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div
+                  role="tablist"
+                  aria-label="Game Mode"
+                  className="flex items-center gap-1 bg-[#12151C] p-1 rounded-lg border border-slate-800"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!isDailyMode}
+                    onClick={() => {
+                      playSfx("click");
+                      setPlayMode("levels");
+                      setCurrentGuess("");
+                      setUiMessage({ text: "", type: "info" });
+                    }}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      !isDailyMode
+                        ? "bg-amber-400 text-slate-950 font-semibold"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Levels
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isDailyMode}
+                    onClick={() => {
+                      playSfx("click");
+                      setPlayMode("daily");
+                      setCurrentGuess("");
+                      setUiMessage({ text: "", type: "info" });
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      isDailyMode
+                        ? "bg-amber-400 text-slate-950 font-semibold"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Daily Challenge</span>
+                    {dailyProgress.completed && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                    )}
+                  </button>
+                </div>
+
+                {!isDailyMode ? (
+                  <div
+                    aria-label="Level selection"
+                    className="flex items-center gap-1 bg-[#12151C] p-1 rounded-lg border border-slate-800"
+                  >
+                    {Array.from({ length: TOTAL_LEVELS }, (_, idx) => idx + 1).map(
+                      (lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => {
+                            playSfx("click");
+                            loadLevel(lvl, true);
+                          }}
+                          className={`px-2.5 sm:px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                            state.level === lvl
+                              ? "bg-amber-400 text-slate-950 font-semibold"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          <span className="hidden sm:inline">{ui.levelLabel} </span>
+                          {lvl}
+                        </button>
+                      )
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3 bg-[#12151C] px-3 py-1.5 rounded-lg border border-slate-800 text-xs tabular-nums">
+                    <span className="font-semibold text-amber-300">
+                      UTC {dailyDateKey}
+                    </span>
+                    <span className="text-slate-600" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-slate-300">
+                      <Clock className="w-3.5 h-3.5 text-sky-400" />
+                      <span>{formatElapsedTime(dailyProgress.elapsedSeconds)}</span>
+                    </span>
+                    <span className="text-slate-600" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="text-slate-400">
+                      Next in{" "}
+                      <span className="text-slate-200 font-medium">
+                        {dailyCountdown}
+                      </span>
+                    </span>
+                  </div>
                 )}
               </div>
 
@@ -1874,17 +2316,19 @@ const App: React.FC = () => {
                   <HelpCircle className="w-4 h-4" />
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    playSfx("click");
-                    loadLevel(state.level, true);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-[#181C26] hover:bg-slate-700 text-white border border-slate-700/80 transition-colors whitespace-nowrap shrink-0"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">{ui.newPuzzle}</span>
-                </button>
+                {!isDailyMode && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx("click");
+                      loadLevel(state.level, true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-[#181C26] hover:bg-slate-700 text-white border border-slate-700/80 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{ui.newPuzzle}</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1896,6 +2340,11 @@ const App: React.FC = () => {
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-slate-400">
                       <div className="flex items-center gap-2">
+                        {isDailyMode && (
+                          <span className="text-amber-400 font-semibold">
+                            Daily Curated ·
+                          </span>
+                        )}
                         <span className="text-white font-medium">
                           {puzzle.themeLocal}
                         </span>
@@ -1907,7 +2356,7 @@ const App: React.FC = () => {
                         )}
                       </div>
                       <span className="tabular-nums text-slate-300">
-                        {state.foundWords.length} / {puzzle.words.length}{" "}
+                        {activeFoundWords.length} / {puzzle.words.length}{" "}
                         {ui.wordsCount}
                       </span>
                     </div>
@@ -1916,8 +2365,8 @@ const App: React.FC = () => {
                       <CrosswordGrid
                         puzzle={puzzle}
                         language={state.language}
-                        foundWords={state.foundWords}
-                        revealedCells={state.revealedCells}
+                        foundWords={activeFoundWords}
+                        revealedCells={activeRevealedCells}
                         onWordClick={(word) => openMeaningForWord(word)}
                       />
                     </div>
@@ -1932,7 +2381,11 @@ const App: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => setShowHintPanel(true)}
-                            disabled={remainingWords.length === 0 || state.score < 10}
+                            disabled={
+                              remainingWords.length === 0 ||
+                              activeBoardScore < 10 ||
+                              (isDailyMode && dailyProgress.completed)
+                            }
                             className="inline-flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 disabled:opacity-40 transition-colors whitespace-nowrap"
                           >
                             <Lightbulb className="w-3.5 h-3.5" />
@@ -1960,8 +2413,8 @@ const App: React.FC = () => {
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
                         {puzzle.words.map((pw) => {
-                          const isFound = state.foundWords.includes(pw.word);
-                          const isClueRevealed = state.revealedClueWords.includes(
+                          const isFound = activeFoundWords.includes(pw.word);
+                          const isClueRevealed = activeRevealedClueWords.includes(
                             pw.word
                           );
                           const tokens = splitGraphemes(pw.word, state.language);
@@ -2006,12 +2459,12 @@ const App: React.FC = () => {
                         })}
                       </div>
 
-                      {state.foundBonusWords.length > 0 && (
+                      {activeFoundBonusWords.length > 0 && (
                         <div className="mt-3 pt-2.5 border-t border-slate-800/60 text-xs text-slate-400 flex flex-wrap items-center gap-2">
                           <span className="text-emerald-400 font-medium">
                             {ui.bonusLabel}
                           </span>
-                          {state.foundBonusWords.map((bw, idx) => (
+                          {activeFoundBonusWords.map((bw, idx) => (
                             <React.Fragment key={bw}>
                               <button
                                 type="button"
@@ -2020,7 +2473,7 @@ const App: React.FC = () => {
                               >
                                 {bw}
                               </button>
-                              {idx < state.foundBonusWords.length - 1 && (
+                              {idx < activeFoundBonusWords.length - 1 && (
                                 <span aria-hidden="true">·</span>
                               )}
                             </React.Fragment>
@@ -2032,100 +2485,240 @@ const App: React.FC = () => {
                 )}
               </section>
 
-              {/* Right Column: Active Guess + Word Wheel */}
+              {/* Right Column: Active Guess + Word Wheel OR Daily Challenge Complete Summary */}
               <section className="lg:w-[420px] shrink-0 flex flex-col items-center justify-center bg-[#12151C] border border-slate-800/80 rounded-2xl p-5 sm:p-6 gap-5">
-                <div
-                  className={`w-full min-h-[60px] flex flex-col items-center justify-center rounded-xl px-4 py-2 border transition-colors ${
-                    shakeGuess ? "animate-shake" : ""
-                  } ${
-                    currentGuess
-                      ? "bg-[#1A1E29] border-amber-400/50"
-                      : uiMessage.text
-                      ? uiMessage.type === "success"
-                        ? "bg-emerald-950/40 border-emerald-500/40"
-                        : uiMessage.type === "bonus"
-                        ? "bg-amber-950/40 border-amber-400/40"
-                        : uiMessage.type === "error"
-                        ? "bg-rose-950/40 border-rose-500/40"
-                        : "bg-[#1A1E29] border-slate-700"
-                      : "bg-[#0E1117] border-slate-800/80"
-                  }`}
-                >
-                  {currentGuess ? (
-                    <span className="text-2xl sm:text-3xl font-semibold text-white tracking-wide">
-                      {currentGuess}
-                    </span>
-                  ) : uiMessage.text ? (
-                    <div className="flex flex-col items-center text-center">
-                      <div className="flex items-center gap-1.5 text-sm sm:text-base font-medium">
-                        {uiMessage.type === "success" && (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        )}
-                        {uiMessage.type === "bonus" && (
-                          <Award className="w-4 h-4 text-amber-400 shrink-0" />
-                        )}
-                        {uiMessage.type === "error" && (
-                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                        )}
-                        <span
-                          className={
-                            uiMessage.type === "success"
-                              ? "text-emerald-300"
-                              : uiMessage.type === "bonus"
-                              ? "text-amber-300"
-                              : uiMessage.type === "error"
-                              ? "text-rose-300"
-                              : "text-slate-200"
-                          }
-                        >
-                          {uiMessage.text}
-                        </span>
+                {isDailyMode && dailyProgress.completed ? (
+                  <div className="w-full flex flex-col gap-4 text-center">
+                    <div className="mx-auto w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                      <Trophy className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
+                        UTC {dailyDateKey} · Locked In
+                      </p>
+                      <h2 className="text-xl font-bold text-white mt-1">
+                        {activePack.nameEn} Daily Complete
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-1">
+                        One entry per verified account per language each 24-hour UTC
+                        window. Come back when the countdown resets.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-left">
+                      <div className="bg-[#0E1117] border border-slate-800 rounded-xl p-3">
+                        <p className="text-[11px] text-slate-400">
+                          Final Daily Score
+                        </p>
+                        <p className="text-2xl font-bold text-amber-400 tabular-nums mt-0.5">
+                          {dailyProgress.score}
+                        </p>
                       </div>
-                      {uiMessage.subText && (
-                        <span className="text-xs text-slate-400 mt-0.5">
-                          {uiMessage.subText}
+                      <div className="bg-[#0E1117] border border-slate-800 rounded-xl p-3">
+                        <p className="text-[11px] text-slate-400">Elapsed Time</p>
+                        <p className="text-2xl font-bold text-white tabular-nums mt-0.5">
+                          {formatElapsedTime(dailyProgress.elapsedSeconds)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {dailyLastBonusBreakdown && (
+                      <div className="bg-[#0E1117] border border-slate-800 rounded-xl p-3.5 text-xs space-y-1.5 tabular-nums">
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span>Completion Bonus</span>
+                          <span className="text-emerald-400 font-semibold">
+                            +{dailyLastBonusBreakdown.completionBonus}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span>Speed Bonus</span>
+                          <span className="text-sky-400 font-semibold">
+                            +{dailyLastBonusBreakdown.speedBonus}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span>
+                            Hint-Free Bonus ({dailyProgress.hintsUsed} hints)
+                          </span>
+                          <span
+                            className={
+                              dailyLastBonusBreakdown.hintFreeBonus > 0
+                                ? "text-amber-300 font-semibold"
+                                : "text-slate-500"
+                            }
+                          >
+                            +{dailyLastBonusBreakdown.hintFreeBonus}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="bg-[#0E1117] border border-slate-800 rounded-xl p-3 flex items-center justify-between text-xs">
+                      <span className="text-slate-400">Next Daily Puzzle</span>
+                      <span className="font-mono font-semibold text-white tabular-nums">
+                        {dailyCountdown}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShareTarget({
+                            id: `daily_${dailyDateKey}_${state.language}`,
+                            title: `Daily Challenge · ${activePack.nameEn}`,
+                            description: `Completed ${
+                              dailyPuzzle.themeEn
+                            } on UTC ${dailyDateKey} in ${formatElapsedTime(
+                              dailyProgress.elapsedSeconds
+                            )} with ${dailyProgress.score} pts.`,
+                            metricLabel: "Daily Score",
+                            target: dailyProgress.score,
+                            category: "mastery",
+                            accentHex: "#F59E0B",
+                          })
+                        }
+                        className="w-full py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-xs inline-flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        <span>Share Daily Result</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playSfx("click");
+                          setPlayMode("levels");
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-[#1A1F2A] hover:bg-[#232938] border border-slate-700/80 text-slate-200 font-medium text-xs transition-colors"
+                      >
+                        Back to Practice Levels
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className={`w-full min-h-[60px] flex flex-col items-center justify-center rounded-xl px-4 py-2 border transition-colors ${
+                        shakeGuess ? "animate-shake" : ""
+                      } ${
+                        currentGuess
+                          ? "bg-[#1A1E29] border-amber-400/50"
+                          : uiMessage.text
+                          ? uiMessage.type === "success"
+                            ? "bg-emerald-950/40 border-emerald-500/40"
+                            : uiMessage.type === "bonus"
+                            ? "bg-amber-950/40 border-amber-400/40"
+                            : uiMessage.type === "error"
+                            ? "bg-rose-950/40 border-rose-500/40"
+                            : "bg-[#1A1E29] border-slate-700"
+                          : "bg-[#0E1117] border-slate-800/80"
+                      }`}
+                    >
+                      {currentGuess ? (
+                        <span className="text-2xl sm:text-3xl font-semibold text-white tracking-wide">
+                          {currentGuess}
+                        </span>
+                      ) : uiMessage.text ? (
+                        <div className="flex flex-col items-center text-center">
+                          <div className="flex items-center gap-1.5 text-sm sm:text-base font-medium">
+                            {uiMessage.type === "success" && (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            )}
+                            {uiMessage.type === "bonus" && (
+                              <Award className="w-4 h-4 text-amber-400 shrink-0" />
+                            )}
+                            {uiMessage.type === "error" && (
+                              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                            )}
+                            <span
+                              className={
+                                uiMessage.type === "success"
+                                  ? "text-emerald-300"
+                                  : uiMessage.type === "bonus"
+                                  ? "text-amber-300"
+                                  : uiMessage.type === "error"
+                                  ? "text-rose-300"
+                                  : "text-slate-200"
+                              }
+                            >
+                              {uiMessage.text}
+                            </span>
+                          </div>
+                          {uiMessage.subText && (
+                            <span className="text-xs text-slate-400 mt-0.5">
+                              {uiMessage.subText}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs sm:text-sm text-slate-500 text-center">
+                          {ui.dragOrTap}
                         </span>
                       )}
                     </div>
-                  ) : (
-                    <span className="text-xs sm:text-sm text-slate-500 text-center">
-                      {ui.dragOrTap}
-                    </span>
-                  )}
-                </div>
 
-                {puzzle && (
-                  <WordWheel
-                    letters={puzzle.letters}
-                    language={state.language}
-                    ui={ui}
-                    bilingualMode={bilingualMode}
-                    onWordSubmit={handleWordSubmit}
-                    onCurrentWordChange={setCurrentGuess}
-                    onInteraction={handleWheelInteraction}
-                    onSelectSound={(step) => playSfx("select", step)}
-                    onClickSound={() => playSfx("click")}
-                  />
+                    {puzzle && (
+                      <WordWheel
+                        letters={puzzle.letters}
+                        language={state.language}
+                        ui={ui}
+                        bilingualMode={bilingualMode}
+                        onWordSubmit={handleWordSubmit}
+                        onCurrentWordChange={setCurrentGuess}
+                        onInteraction={handleWheelInteraction}
+                        onSelectSound={(step) => playSfx("select", step)}
+                        onClickSound={() => playSfx("click")}
+                      />
+                    )}
+                  </>
                 )}
               </section>
             </main>
 
+            {isDailyMode && (
+              <div className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 pb-6">
+                <DailyLeaderboardPanel
+                  dateKey={dailyDateKey}
+                  activeLanguage={state.language}
+                  entries={dailyLeaderboardEntries}
+                  currentUserId={authUser?.uid || null}
+                  currentUserDisplayName={
+                    cloudProfile?.displayName || authUser?.displayName || "You"
+                  }
+                  currentUserHandle={cloudProfile?.handle || "player"}
+                  currentUserAvatarColor={
+                    cloudProfile?.avatarColor || "#F59E0B"
+                  }
+                  isCloudVerified={isCloudSynced}
+                  localDailyProgress={dailyProgress}
+                  onOpenAccount={() => setActiveView("account")}
+                  onPlayDailyLanguage={handleOpenDailyForLanguage}
+                />
+              </div>
+            )}
+
             <FooterLeftContent
               levelId={state.level}
               totalLevels={TOTAL_LEVELS}
-              score={state.score}
+              score={activeBoardScore}
               language={state.language}
               ui={ui}
               bilingualMode={bilingualMode}
+              dailyLabel={isDailyMode ? `Daily · UTC ${dailyDateKey}` : undefined}
               button={() => setShowHintPanel(true)}
-              buttonDisabled={state.score < 10 || remainingWords.length === 0}
+              buttonDisabled={
+                activeBoardScore < 10 ||
+                remainingWords.length === 0 ||
+                (isDailyMode && dailyProgress.completed)
+              }
               hasSolvedWord={
-                state.foundWords.length > 0 || state.foundBonusWords.length > 0
+                activeFoundWords.length > 0 || activeFoundBonusWords.length > 0
               }
               onOpenLatestMeaning={() => {
                 const latest =
-                  state.foundWords[state.foundWords.length - 1] ||
-                  state.foundBonusWords[state.foundBonusWords.length - 1];
+                  activeFoundWords[activeFoundWords.length - 1] ||
+                  activeFoundBonusWords[activeFoundBonusWords.length - 1];
                 if (latest) openMeaningForWord(latest);
               }}
             />
@@ -2181,7 +2774,7 @@ const App: React.FC = () => {
 
       <HintPanel
         open={showHintPanel}
-        score={state.score}
+        score={activeBoardScore}
         remainingWordsCount={remainingWords.length}
         hasUnrevealedLetters={hasUnrevealedLetters}
         hasUnrevealedClues={hasUnrevealedClues}

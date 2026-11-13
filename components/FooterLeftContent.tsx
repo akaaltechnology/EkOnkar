@@ -14,6 +14,7 @@ interface FooterLeftContentProps {
   language: LanguageCode;
   ui: LanguageUI;
   bilingualMode: boolean;
+  dailyLabel?: string;
   buttonDisabled?: boolean;
   button: () => void;
   onOpenLatestMeaning?: () => void;
@@ -27,6 +28,7 @@ const FooterLeftContent: React.FC<FooterLeftContentProps> = ({
   language,
   ui,
   bilingualMode,
+  dailyLabel,
   button,
   buttonDisabled,
   onOpenLatestMeaning,
@@ -39,7 +41,7 @@ const FooterLeftContent: React.FC<FooterLeftContentProps> = ({
       <div className="max-w-[1200px] mx-auto flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 text-sm text-slate-300 tabular-nums">
           <span className="font-medium text-white">
-            {ui.levelLabel} {levelId}/{totalLevels}
+            {dailyLabel ? dailyLabel : `${ui.levelLabel} ${levelId}/${totalLevels}`}
           </span>
           <span className="text-slate-600" aria-hidden="true">
             ·

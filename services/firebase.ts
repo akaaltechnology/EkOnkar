@@ -44,6 +44,7 @@ import {
 import firebaseConfig from "../firebase-applet-config.json";
 import {
   AppNotification,
+  DailyLeaderboardEntry,
   GoogleCalendarEvent,
   LanguageCode,
   LanguageStatRecord,
@@ -1046,3 +1047,119 @@ export function subscribeUserData(
     unsubNotes();
   };
 }
+
+export async function submitDailyLeaderboardEntry(params: {
+  uid: string;
+  displayName: string;
+  handle: string;
+  avatarColor: string;
+  dateKey: string;
+  language: LanguageCode;
+  puzzleId: string;
+  score: number;
+  wordsSolved: number;
+  totalWords: number;
+  bonusWords: number;
+  hintsUsed: number;
+  elapsedSeconds: number;
+  completed: boolean;
+}): Promise<void> {
+  const entryId = `${params.dateKey}_${params.language}_${params.uid}`;
+  const path = `dailyLeaderboard/${entryId}`;
+  const ref = doc(db, "dailyLeaderboard", entryId);
+
+  const safePayload = {
+    displayName: params.displayName.trim().slice(0, 60) || "Scholar",
+    handle: sanitizeHandle(params.handle || params.displayName),
+    avatarColor: (params.avatarColor || "#F59E0B").slice(0, 24),
+    score: Math.max(0, Math.min(50000, Math.floor(params.score))),
+    wordsSolved: Math.max(0, Math.min(50, Math.floor(params.wordsSolved))),
+    bonusWords: Math.max(0, Math.min(100, Math.floor(params.bonusWords))),
+    hintsUsed: Math.max(0, Math.min(50, Math.floor(params.hintsUsed))),
+    elapsedSeconds: Math.max(0, Math.min(86400, Math.floor(params.elapsedSeconds))),
+    completed: Boolean(params.completed),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      if (snap.data().completed === true) {
+        return;
+      }
+      await updateDoc(ref, safePayload);
+    } else {
+      await setDoc(ref, {
+        ...safePayload,
+        uid: params.uid,
+        dateKey: params.dateKey.slice(0, 10),
+        language: params.language,
+        puzzleId: params.puzzleId.slice(0, 80) || "daily_puzzle",
+        totalWords: Math.max(1, Math.min(50, Math.floor(params.totalWords))),
+        createdAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeDailyLeaderboard(
+  dateKey: string,
+  onEntries: (entries: DailyLeaderboardEntry[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  const path = "dailyLeaderboard";
+  const q = query(
+    collection(db, "dailyLeaderboard"),
+    where("dateKey", "==", dateKey),
+    limit(150)
+  );
+
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: DailyLeaderboardEntry[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            uid: String(data.uid || ""),
+            displayName: String(data.displayName || "Scholar"),
+            handle: String(data.handle || "player"),
+            avatarColor: String(data.avatarColor || "#F59E0B"),
+            dateKey: String(data.dateKey || dateKey),
+            language: (data.language || "pa") as LanguageCode,
+            puzzleId: String(data.puzzleId || ""),
+            score: Number(data.score ?? 0),
+            wordsSolved: Number(data.wordsSolved ?? 0),
+            totalWords: Number(data.totalWords ?? 1),
+            bonusWords: Number(data.bonusWords ?? 0),
+            hintsUsed: Number(data.hintsUsed ?? 0),
+            elapsedSeconds: Number(data.elapsedSeconds ?? 0),
+            completed: Boolean(data.completed),
+            createdAtMs: toMs(data.createdAt),
+            updatedAtMs: toMs(data.updatedAt),
+          };
+        })
+        .sort(
+          (a, b) =>
+            Number(b.completed) - Number(a.completed) ||
+            b.score - a.score ||
+            a.elapsedSeconds - b.elapsedSeconds ||
+            a.updatedAtMs - b.updatedAtMs
+        );
+      onEntries(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) {
+          onError(wrapped);
+        }
+      }
+    }
+  );
+}
+
